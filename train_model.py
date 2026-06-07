@@ -19,6 +19,7 @@ MODEL_OUTPUT = "france_real_estate_price_model.joblib"
 
 
 def download_dvf(output_dir):
+    # Downloading is optional because the DVF file is large.
     output_dir.mkdir(parents=True, exist_ok=True)
     zip_path = output_dir / "dvf_2024.zip"
 
@@ -38,6 +39,7 @@ def download_dvf(output_dir):
 
 
 def prepare_data(data_file):
+    # We keep only the variables useful for the first version of the model.
     columns = [
         "Date mutation",
         "Nature mutation",
@@ -57,6 +59,7 @@ def prepare_data(data_file):
         dtype={"Code postal": "string"},
     )
 
+    # We only train on real sales of residential properties.
     df = df[df["Nature mutation"] == "Vente"]
     df = df[df["Type local"].isin(["Maison", "Appartement"])]
 
@@ -68,16 +71,20 @@ def prepare_data(data_file):
     ]
 
     for column in numeric_columns:
+        
         df[column] = df[column].astype(str).str.replace(",", ".", regex=False)
         df[column] = pd.to_numeric(df[column], errors="coerce")
 
+    # Postal code is treated as a category, not as a mathematical number.
     df["Surface terrain"] = df["Surface terrain"].fillna(0)
     df["Code postal"] = df["Code postal"].astype("string").str.zfill(5)
     df["departement"] = df["Code postal"].str[:2]
 
+    # The month can capture small seasonal effects in the housing market.
     df["Date mutation"] = pd.to_datetime(df["Date mutation"], errors="coerce", dayfirst=True)
     df["month"] = df["Date mutation"].dt.month
 
+    # Missing important values are removed because the model cannot use them.
     df = df.dropna(
         subset=[
             "Valeur fonciere",
@@ -90,6 +97,7 @@ def prepare_data(data_file):
         ]
     )
 
+    # Remove values that are probably errors or very unusual transactions.
     df = df[
         (df["Surface reelle bati"] >= 10)
         & (df["Surface reelle bati"] <= 400)
@@ -99,9 +107,11 @@ def prepare_data(data_file):
         & (df["Valeur fonciere"] <= 2_500_000)
     ]
 
+    # Price per square meter is useful to detect unrealistic transactions.
     df["prix_m2"] = df["Valeur fonciere"] / df["Surface reelle bati"]
     df = df[(df["prix_m2"] >= 500) & (df["prix_m2"] <= 20_000)]
 
+    # We remove extreme local outliers separately by department and property type.
     local_quantiles = (
         df.groupby(["departement", "Type local"])["prix_m2"]
         .quantile([0.02, 0.98])
@@ -112,11 +122,14 @@ def prepare_data(data_file):
     df = df.join(local_quantiles, on=["departement", "Type local"])
     df = df[df["prix_m2"].between(df["q02"], df["q98"])]
 
+    # add simple variables that help the model learn patterns.
     df["surface_log"] = np.log1p(df["Surface reelle bati"])
     df["terrain_log"] = np.log1p(df["Surface terrain"].clip(0, 10000))
     df["rooms_per_m2"] = df["Nombre pieces principales"] / df["Surface reelle bati"]
 
     top_cp = set(df["Code postal"].value_counts().head(150).index)
+
+    # Keep frequent postal codes, group the others by department.
     df["cp_model"] = df["Code postal"].where(
         df["Code postal"].isin(top_cp),
         "OTHER_" + df["departement"],
@@ -126,6 +139,7 @@ def prepare_data(data_file):
 
 
 def train_model(df, top_cp):
+    # Numerical features can be used directly by the model.
     features_num = [
         "Surface reelle bati",
         "Nombre pieces principales",
@@ -135,6 +149,7 @@ def train_model(df, top_cp):
         "month",
     ]
 
+    # Categorical features must be encoded before training.
     features_cat = [
         "Type local",
         "departement",
@@ -144,6 +159,7 @@ def train_model(df, top_cp):
     X = df[features_num + features_cat]
     y = df["Valeur fonciere"]
 
+    # The test set is kept separate to evaluate the model on unseen data.
     X_train, X_test, y_train, y_test = train_test_split(
         X,
         y,
@@ -151,6 +167,7 @@ def train_model(df, top_cp):
         random_state=42,
     )
 
+    # ColumnTransformer applies different preprocessing to numeric and categorical columns.
     preprocess = ColumnTransformer(
         [
             ("num", "passthrough", features_num),
@@ -174,6 +191,7 @@ def train_model(df, top_cp):
         categorical_features=categorical_features,
     )
 
+    # Prices are skewed, so training on log(price) helps stabilize learning.
     model = TransformedTargetRegressor(
         regressor=Pipeline(
             [
@@ -187,8 +205,10 @@ def train_model(df, top_cp):
 
     model.fit(X_train, y_train)
 
+    # Negative prices are impossible, so predictions are clipped at zero.
     predictions = np.maximum(model.predict(X_test), 0)
 
+    # Several metrics are printed because each one gives different information.
     metrics = {
         "rows_used": len(df),
         "mae": mean_absolute_error(y_test, predictions),
@@ -197,6 +217,7 @@ def train_model(df, top_cp):
         "r2": r2_score(y_test, predictions),
     }
 
+    # The app needs the model and also the postal-code metadata used in training.
     bundle = {
         "model": model,
         "top_cp": sorted(top_cp),
@@ -209,6 +230,7 @@ def train_model(df, top_cp):
 
 
 def main():
+    # argparse lets us train either from a local file or by downloading the dataset.
     parser = argparse.ArgumentParser(description="Train the France real estate price model.")
     parser.add_argument(
         "--data-file",
@@ -236,6 +258,7 @@ def main():
     args = parser.parse_args()
 
     if args.download:
+        # Download mode is convenient for reproducing the project from GitHub.
         data_file = download_dvf(args.data_dir)
     elif args.data_file is not None:
         data_file = args.data_file
@@ -253,6 +276,7 @@ def main():
     print("Training model...")
     bundle, metrics = train_model(df, top_cp)
 
+    # Save the trained pipeline so the Streamlit app can load it later.
     joblib.dump(bundle, args.output)
 
     print(f"Model saved to {args.output}")

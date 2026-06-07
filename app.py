@@ -8,6 +8,9 @@ import streamlit as st
 
 
 MODEL_PATH = Path("france_real_estate_price_model.joblib")
+
+# These metrics are shown if the saved model does not already contain metrics.
+# They correspond to the final training result used for this project.
 DEFAULT_MODEL_METRICS = {
     "rows_used": 869761,
     "mae": 73090.51,
@@ -15,6 +18,37 @@ DEFAULT_MODEL_METRICS = {
     "rmse": 122376.68,
     "r2": 0.6448,
 }
+
+
+def install_sklearn_compatibility_shims():
+    # The included model was saved with Scikit-learn 1.6.1.
+    # Some newer Scikit-learn versions removed this private helper class.
+    # Defining it as a list-like object lets joblib unpickle the old model.
+    try:
+        import sklearn.compose._column_transformer as column_transformer
+    except Exception:
+        return
+
+    if hasattr(column_transformer, "_RemainderColsList"):
+        return
+
+    class _RemainderColsList(list):
+        def __init__(self, columns=None, *args, **kwargs):
+            if columns is None:
+                columns = []
+            super().__init__(columns)
+
+        def __setstate__(self, state):
+            if isinstance(state, dict):
+                self.__dict__.update(state)
+            elif state is not None:
+                try:
+                    self.clear()
+                    self.extend(state)
+                except TypeError:
+                    pass
+
+    column_transformer._RemainderColsList = _RemainderColsList
 
 
 st.set_page_config(
@@ -26,6 +60,8 @@ st.set_page_config(
 
 @st.cache_resource
 def load_model_bundle(model_path: Path):
+    # Streamlit caches the model so it is not loaded again after every click.
+    install_sklearn_compatibility_shims()
     return joblib.load(model_path)
 
 
@@ -34,6 +70,7 @@ def format_price(value):
 
 
 def normalize_postal_code(code_postal):
+    # Postal codes are categorical data, so we keep them as 5-character strings.
     digits = "".join(ch for ch in str(code_postal) if ch.isdigit())
     return digits.zfill(5)[:5]
 
@@ -47,8 +84,11 @@ def build_property_dataframe(
     month,
     top_cp,
 ):
+    
     cp = normalize_postal_code(code_postal)
     department = cp[:2]
+
+    # Rare postal codes are grouped by department to avoid unknown categories.
     cp_model = cp if cp in top_cp else f"OTHER_{department}"
 
     return pd.DataFrame(
@@ -69,6 +109,7 @@ def build_property_dataframe(
 
 
 def evaluate_listing_price(listing_price, predicted_price, threshold_percent):
+    # Positive difference means the listing is more expensive than the prediction.
     difference_percent = (listing_price - predicted_price) / predicted_price * 100
 
     if difference_percent > threshold_percent:
@@ -88,6 +129,7 @@ st.title("France Real Estate Price Predictor")
 st.caption("Estimate residential property prices in France using a DVF-trained model.")
 
 if not MODEL_PATH.exists():
+  
     st.error("Model file not found.")
     st.write(
         "Place `france_real_estate_price_model.joblib` in the same folder as "
@@ -99,14 +141,22 @@ try:
     bundle = load_model_bundle(MODEL_PATH)
 except Exception as exc:
     st.error("Could not load the model file.")
+    if "_RemainderColsList" in str(exc):
+        st.warning(
+            "This usually means that Scikit-learn is not the same version as the "
+            "one used to save the model. Reinstall the dependencies with "
+            "`python -m pip install --force-reinstall -r requirements.txt`."
+        )
     st.exception(exc)
     st.stop()
 
 if isinstance(bundle, dict):
+    # The training script saves a dictionary containing the model and metadata.
     model = bundle.get("model")
     top_cp = set(bundle.get("top_cp", []))
     metrics = bundle.get("metrics", DEFAULT_MODEL_METRICS)
 else:
+    # This fallback supports a file that contains only the model object.
     model = bundle
     top_cp = set()
     metrics = DEFAULT_MODEL_METRICS
@@ -176,6 +226,7 @@ listing_price = st.number_input(
 if st.button("Predict price", type="primary", use_container_width=True):
     month = list(calendar.month_name).index(month_name)
 
+    # Convert user inputs into a one-row dataframe accepted by the model.
     property_df = build_property_dataframe(
         surface=surface,
         rooms=rooms,
@@ -187,6 +238,7 @@ if st.button("Predict price", type="primary", use_container_width=True):
     )
 
     try:
+        # The model returns an estimated market price in euros.
         predicted_price = float(model.predict(property_df)[0])
     except Exception as exc:
         st.error("Prediction failed. Check that the app features match the trained model.")
@@ -194,6 +246,8 @@ if st.button("Predict price", type="primary", use_container_width=True):
         st.stop()
 
     predicted_price = max(predicted_price, 0)
+
+    # Compare the user's listing price with the model estimate.
     difference_percent, status, status_help = evaluate_listing_price(
         listing_price=listing_price,
         predicted_price=predicted_price,

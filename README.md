@@ -17,14 +17,7 @@ This repository contains both the trained model and the training code. That make
 - Displays price per square meter for both the predicted price and listing price.
 - Uses a saved Scikit-learn model loaded with Joblib.
 
-## Tech Stack
 
-- Python
-- Pandas
-- NumPy
-- Scikit-learn
-- Streamlit
-- Joblib
 
 ## Project Structure
 
@@ -107,7 +100,7 @@ For a master application, this is the key point of the project: it is not only a
 Clone the repository:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/france-real-estate-price-predictor.git
+git clone https://github.com/abdorad/france-real-estate-price-predictor.git
 cd france-real-estate-price-predictor
 ```
 
@@ -133,6 +126,14 @@ Install dependencies:
 
 ```bash
 pip install -r requirements.txt
+```
+
+If you already installed the dependencies before, reinstall them to make sure the
+Scikit-learn version matches the saved model. The included model was saved with
+Scikit-learn `1.6.1`, which is pinned in `requirements.txt`.
+
+```bash
+python -m pip install --force-reinstall -r requirements.txt
 ```
 
 ## Run the App
@@ -210,5 +211,3 @@ Because of this, the prediction should be used as a decision-support estimate, n
 DVF dataset from the French government open data platform:
 
 https://www.data.gouv.fr/
-
-
