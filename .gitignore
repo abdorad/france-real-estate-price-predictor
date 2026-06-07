@@ -1,0 +1,12 @@
+__pycache__/
+.streamlit/
+.venv/
+venv/
+*.pyc
+*.pkl
+*.joblib
+!france_real_estate_price_model.joblib
+*.zip
+*.csv
+*.txt
+data/
